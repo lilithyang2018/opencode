@@ -786,8 +786,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
       const cfg = yield* config.get()
       const sh = Shell.preferred(cfg.shell)
-      const args = Shell.args(sh, input.command)
       const cwd = ctx.directory
+      const args = Shell.args(sh, input.command, cwd)
       const shellEnv = yield* plugin.trigger(
         "shell.env",
         { cwd, sessionID: input.sessionID, callID: part.callID },
