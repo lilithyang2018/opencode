@@ -213,6 +213,7 @@ export const SettingsGeneral: Component = () => {
         const label = s.acceptable ? text : `${text} (${language.t("settings.general.row.shell.terminalOnly")})`
         return {
           id: s.path,
+          // Prefer name over path - "bash" is much cleaner than the explicit full route even when it may change due to PATH.
           value: dup ? s.path : s.name,
           label,
         }
