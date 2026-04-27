@@ -719,182 +719,182 @@ NOTE: At any point in time through this workflow you should feel free to ask the
     })
 
     const shellImpl = Effect.fn("SessionPrompt.shellImpl")(function* (input: ShellInput) {
-      const ctx = yield* InstanceState.context
-      const run = yield* runner()
-      const session = yield* sessions.get(input.sessionID)
-      if (session.revert) {
-        yield* revert.cleanup(session)
-      }
-      const agent = yield* agents.get(input.agent)
-      if (!agent) {
-        const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
-        const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-        const error = new NamedError.Unknown({ message: `Agent not found: "${input.agent}".${hint}` })
-        yield* bus.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
-        throw error
-      }
-      const model = input.model ?? agent.model ?? (yield* lastModel(input.sessionID))
-      const userMsg: MessageV2.User = {
-        id: input.messageID ?? MessageID.ascending(),
-        sessionID: input.sessionID,
-        time: { created: Date.now() },
-        role: "user",
-        agent: input.agent,
-        model: { providerID: model.providerID, modelID: model.modelID },
-      }
-      yield* sessions.updateMessage(userMsg)
-      const userPart: MessageV2.Part = {
-        type: "text",
-        id: PartID.ascending(),
-        messageID: userMsg.id,
-        sessionID: input.sessionID,
-        text: "The following tool was executed by the user",
-        synthetic: true,
-      }
-      yield* sessions.updatePart(userPart)
+      return yield* Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const { msg, part, cwd } = yield* Effect.gen(function* () {
+            const ctx = yield* InstanceState.context
+            const session = yield* sessions.get(input.sessionID)
+            if (session.revert) {
+              yield* revert.cleanup(session)
+            }
+            const agent = yield* agents.get(input.agent)
+            if (!agent) {
+              const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
+              const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
+              const error = new NamedError.Unknown({ message: `Agent not found: "${input.agent}".${hint}` })
+              yield* bus.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
+              throw error
+            }
+            const model = input.model ?? agent.model ?? (yield* lastModel(input.sessionID))
+            const userMsg: MessageV2.User = {
+              id: input.messageID ?? MessageID.ascending(),
+              sessionID: input.sessionID,
+              time: { created: Date.now() },
+              role: "user",
+              agent: input.agent,
+              model: { providerID: model.providerID, modelID: model.modelID },
+            }
+            yield* sessions.updateMessage(userMsg)
+            const userPart: MessageV2.Part = {
+              type: "text",
+              id: PartID.ascending(),
+              messageID: userMsg.id,
+              sessionID: input.sessionID,
+              text: "The following tool was executed by the user",
+              synthetic: true,
+            }
+            yield* sessions.updatePart(userPart)
 
-      const msg: MessageV2.Assistant = {
-        id: MessageID.ascending(),
-        sessionID: input.sessionID,
-        parentID: userMsg.id,
-        mode: input.agent,
-        agent: input.agent,
-        cost: 0,
-        path: { cwd: ctx.directory, root: ctx.worktree },
-        time: { created: Date.now() },
-        role: "assistant",
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-        modelID: model.modelID,
-        providerID: model.providerID,
-      }
-      yield* sessions.updateMessage(msg)
-      const part: MessageV2.ToolPart = {
-        type: "tool",
-        id: PartID.ascending(),
-        messageID: msg.id,
-        sessionID: input.sessionID,
-        tool: "bash",
-        callID: ulid(),
-        state: {
-          status: "running",
-          time: { start: Date.now() },
-          input: { command: input.command },
-        },
-      }
-      yield* sessions.updatePart(part)
+            const msg: MessageV2.Assistant = {
+              id: MessageID.ascending(),
+              sessionID: input.sessionID,
+              parentID: userMsg.id,
+              mode: input.agent,
+              agent: input.agent,
+              cost: 0,
+              path: { cwd: ctx.directory, root: ctx.worktree },
+              time: { created: Date.now() },
+              role: "assistant",
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              modelID: model.modelID,
+              providerID: model.providerID,
+            }
+            yield* sessions.updateMessage(msg)
+            const part: MessageV2.ToolPart = {
+              type: "tool",
+              id: PartID.ascending(),
+              messageID: msg.id,
+              sessionID: input.sessionID,
+              tool: "bash",
+              callID: ulid(),
+              state: {
+                status: "running",
+                time: { start: Date.now() },
+                input: { command: input.command },
+              },
+            }
+            yield* sessions.updatePart(part)
+            return { msg, part, cwd: ctx.directory }
+          })
 
-      const sh = Shell.preferred()
-      const shellName = (
-        process.platform === "win32" ? path.win32.basename(sh, ".exe") : path.basename(sh)
-      ).toLowerCase()
-      const cwd = ctx.directory
-      const invocations: Record<string, { args: string[] }> = {
-        nu: { args: ["-c", input.command] },
-        fish: { args: ["-c", input.command] },
-        zsh: {
-          args: [
-            "-l",
-            "-c",
-            `
+          const sh = Shell.preferred()
+          const shellName = (
+            process.platform === "win32" ? path.win32.basename(sh, ".exe") : path.basename(sh)
+          ).toLowerCase()
+          const invocations: Record<string, { args: string[] }> = {
+            nu: { args: ["-c", input.command] },
+            fish: { args: ["-c", input.command] },
+            zsh: {
+              args: [
+                "-l",
+                "-c",
+                `
               [[ -f ~/.zshenv ]] && source ~/.zshenv >/dev/null 2>&1 || true
               [[ -f "\${ZDOTDIR:-$HOME}/.zshrc" ]] && source "\${ZDOTDIR:-$HOME}/.zshrc" >/dev/null 2>&1 || true
               cd -- "$1"
               eval ${JSON.stringify(input.command)}
             `,
-            "opencode",
-            cwd,
-          ],
-        },
-        bash: {
-          args: [
-            "-l",
-            "-c",
-            `
+                "opencode",
+                cwd,
+              ],
+            },
+            bash: {
+              args: [
+                "-l",
+                "-c",
+                `
               shopt -s expand_aliases
               [[ -f ~/.bashrc ]] && source ~/.bashrc >/dev/null 2>&1 || true
               cd -- "$1"
               eval ${JSON.stringify(input.command)}
             `,
-            "opencode",
-            cwd,
-          ],
-        },
-        cmd: { args: ["/c", input.command] },
-        powershell: { args: ["-NoProfile", "-Command", input.command] },
-        pwsh: { args: ["-NoProfile", "-Command", input.command] },
-        "": { args: ["-c", input.command] },
-      }
-
-      const args = (invocations[shellName] ?? invocations[""]).args
-      const shellEnv = yield* plugin.trigger(
-        "shell.env",
-        { cwd, sessionID: input.sessionID, callID: part.callID },
-        { env: {} },
-      )
-
-      const cmd = ChildProcess.make(sh, args, {
-        cwd,
-        extendEnv: true,
-        env: { ...shellEnv.env, TERM: "dumb" },
-        stdin: "ignore",
-        forceKillAfter: "3 seconds",
-      })
-
-      let output = ""
-      let aborted = false
-
-      const finish = Effect.uninterruptible(
-        Effect.gen(function* () {
-          if (aborted) {
-            output += "\n\n" + ["<metadata>", "User aborted the command", "</metadata>"].join("\n")
+                "opencode",
+                cwd,
+              ],
+            },
+            cmd: { args: ["/c", input.command] },
+            powershell: { args: ["-NoProfile", "-Command", input.command] },
+            pwsh: { args: ["-NoProfile", "-Command", input.command] },
+            "": { args: ["-c", input.command] },
           }
-          if (!msg.time.completed) {
-            msg.time.completed = Date.now()
-            yield* sessions.updateMessage(msg)
+
+          const args = (invocations[shellName] ?? invocations[""]).args
+          let output = ""
+          let aborted = false
+
+          const finish = Effect.uninterruptible(
+            Effect.gen(function* () {
+              if (aborted) {
+                output += "\n\n" + ["<metadata>", "User aborted the command", "</metadata>"].join("\n")
+              }
+              if (!msg.time.completed) {
+                msg.time.completed = Date.now()
+                yield* sessions.updateMessage(msg)
+              }
+              if (part.state.status === "running") {
+                part.state = {
+                  status: "completed",
+                  time: { ...part.state.time, end: Date.now() },
+                  input: part.state.input,
+                  title: "",
+                  metadata: { output, description: "" },
+                  output,
+                }
+                yield* sessions.updatePart(part)
+              }
+            }),
+          )
+
+          const exit = yield* restore(
+            Effect.gen(function* () {
+              const shellEnv = yield* plugin.trigger(
+                "shell.env",
+                { cwd, sessionID: input.sessionID, callID: part.callID },
+                { env: {} },
+              )
+              const cmd = ChildProcess.make(sh, args, {
+                cwd,
+                extendEnv: true,
+                env: { ...shellEnv.env, TERM: "dumb" },
+                stdin: "ignore",
+                forceKillAfter: "3 seconds",
+              })
+              const handle = yield* spawner.spawn(cmd)
+              yield* Stream.runForEach(Stream.decodeText(handle.all), (chunk) =>
+                Effect.gen(function* () {
+                  output += chunk
+                  if (part.state.status === "running") {
+                    part.state.metadata = { output, description: "" }
+                    yield* sessions.updatePart(part)
+                  }
+                }),
+              )
+              yield* handle.exitCode
+            }).pipe(Effect.scoped, Effect.orDie),
+          ).pipe(Effect.exit)
+
+          if (Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)) {
+            aborted = true
           }
-          if (part.state.status === "running") {
-            part.state = {
-              status: "completed",
-              time: { ...part.state.time, end: Date.now() },
-              input: part.state.input,
-              title: "",
-              metadata: { output, description: "" },
-              output,
-            }
-            yield* sessions.updatePart(part)
+          yield* finish
+
+          if (Exit.isFailure(exit) && !aborted && !Cause.hasInterruptsOnly(exit.cause)) {
+            return yield* Effect.failCause(exit.cause)
           }
+
+          return { info: msg, parts: [part] }
         }),
       )
-
-      const exit = yield* Effect.gen(function* () {
-        const handle = yield* spawner.spawn(cmd)
-        yield* Stream.runForEach(Stream.decodeText(handle.all), (chunk) =>
-          Effect.sync(() => {
-            output += chunk
-            if (part.state.status === "running") {
-              part.state.metadata = { output, description: "" }
-              void run.fork(sessions.updatePart(part))
-            }
-          }),
-        )
-        yield* handle.exitCode
-      }).pipe(
-        Effect.scoped,
-        Effect.onInterrupt(() =>
-          Effect.sync(() => {
-            aborted = true
-          }),
-        ),
-        Effect.orDie,
-        Effect.ensuring(finish),
-        Effect.exit,
-      )
-
-      if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
-        return yield* Effect.failCause(exit.cause)
-      }
-
-      return { info: msg, parts: [part] }
     })
 
     const getModel = Effect.fn("SessionPrompt.getModel")(function* (
